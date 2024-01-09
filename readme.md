@@ -30,7 +30,7 @@ API_KEY=<YOUR_CUSTOM_API_KEY>
 
 2. **Database: SQLite**
    Contact the repo owner for the database
-   `hadith_search_full.db` and `hadith_embeddings`
+   `hadith_search_full.db` and `hadith_embeddings.db`
 
 3. **Install Dependencies:**
    Run the following command to install the required dependencies:
