@@ -1,0 +1,10 @@
+.venv
+.env
+*.ipynb
+__pycache__
+*.pyc
+transfomed_data
+.vscode
+*.db
+/databases
+csv_files
