@@ -8,3 +8,4 @@ transfomed_data
 *.db
 /databases
 csv_files
+tfidf

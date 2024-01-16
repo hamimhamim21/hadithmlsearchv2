@@ -20,11 +20,12 @@ from sqlalchemy import create_engine, func
 # Data Manipulation
 import pandas as pd
 import time
-from utils import search_and_rank_results_full, search_and_rank_results_original
+from utils import search_and_rank_hybrid, search_and_rank_results_original
 from translator import translate_eng
 # ML Model
 from sentence_transformers import SentenceTransformer
 
+import pickle
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
@@ -34,12 +35,30 @@ logger = logging.getLogger(__name__)
 #                INITIALIZATION                     #
 #####################################################
 # Loading the database and ML Model
-connection_string_embedding = 'sqlite:///hadith_embeddings.db'
-connection_string_metadata = 'sqlite:///hadith_search_full.db'
+connection_string_embedding = 'sqlite:///databases/hadith_embeddings.db'
+connection_string_metadata = 'sqlite:///databases/hadith_search_full.db'
 
 engine_embedding = create_engine(connection_string_embedding)
 engine_metadata = create_engine(connection_string_metadata)
+# Base path
+base_dir = "tfidf"
 
+# Join the paths
+tfidf_matrix_path = os.path.join(base_dir, "tfidf_matrix.pkl")
+vectorizer_path = os.path.join(base_dir, "tfidf_vectorizer.pkl")
+document_ids_path = os.path.join(base_dir, "document_ids.pkl")
+
+# Load the TF-IDF matrix and indices
+with open(tfidf_matrix_path, 'rb') as f:
+    tfidf_matrix, document_ids = pickle.load(f)  # Unpack the saved tuple
+
+# Load the vectorizer
+with open(vectorizer_path, 'rb') as f:
+    vectorizer = pickle.load(f)
+
+# Load document_ids
+with open(document_ids_path, 'rb') as f:
+    document_id = pickle.load(f)
 model = None
 
 
@@ -77,13 +96,13 @@ authorizations = {
 app = Flask(__name__)
 
 # Initialize API with Flask-RESTPlus
-api = Api(app, 
-          version='1.0', 
+api = Api(app,
+          version='1.0',
           title='Hadith Search API',
           description='A simple API for searching Hadiths',
           authorizations=authorizations,
           security='apiKey'
-)
+          )
 # Define a namespace
 ns = api.namespace('search', description='Search operations')
 
@@ -93,16 +112,20 @@ search_model = api.model('Search', {
     'language_code': fields.String(required=True, description='Language code for the query')
 })
 
+
 def require_api_key(func):
     @wraps(func)
     def check_api_key(*args, **kwargs):
         try:
-            expected_api_key = os.getenv('API_KEY')  # Ensure you have set this environment variable
+            # Ensure you have set this environment variable
+            expected_api_key = os.getenv('API_KEY')
             received_api_key = request.headers.get('X-API-KEY')
-            logger.info(f"Expected API Key: {expected_api_key}, Received API Key: {received_api_key}")
+            logger.info(
+                f"Expected API Key: {expected_api_key}, Received API Key: {received_api_key}")
 
             if not expected_api_key or expected_api_key != received_api_key:
-                logger.error("Unauthorized access attempt with API key: " + str(received_api_key))
+                logger.error(
+                    "Unauthorized access attempt with API key: " + str(received_api_key))
                 return {"error": "Unauthorized"}, 401
 
             return func(*args, **kwargs)
@@ -115,7 +138,7 @@ def require_api_key(func):
 
 @ns.route('/')
 class Search(Resource):
-    @api.doc(security='apiKey',params={
+    @api.doc(security='apiKey', params={
         'query': 'The search query',
         'language_code': 'Language code for the query'
     })
@@ -136,8 +159,16 @@ class Search(Resource):
                 logger.error('No query provided')
                 return jsonify({"error": "No query provided"}), 400
             t1 = time.time()
-            results = search_and_rank_results_original(
-                query=english_translation[0]['translations'][0]['text'], model=model, language_code=language_code, db_conn_hadith=engine_metadata, db_conn_embedding=engine_embedding)
+            results = search_and_rank_hybrid(
+                query=english_translation[0]['translations'][0]['text'],
+                model=model, language_code=language_code,
+                db_conn_hadith=engine_metadata,
+                db_conn_embedding=engine_embedding,
+                vectorizer=vectorizer,
+                tfidf_matrix=tfidf_matrix,
+                document_ids=document_ids,
+                top_n=20,
+                tfidf_weight=0.7)
             gc.collect()
             t2 = time.time()
             logger.info(f'Search completed in {t2-t1} seconds')
@@ -146,8 +177,7 @@ class Search(Resource):
                 return jsonify({"error": "No results found"}), 404
             # Computing results
             results_dict = results.to_dict(orient='records')
-            response_data = json.dumps(results_dict)
-            print(response_data)
+            response_data = json.dumps(results_dict, indent=4)
             return Response(response_data, mimetype='application/json', status=200)
 
         except Exception as e:
